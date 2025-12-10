@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Professor Aurora — Local TF.js Generator (RAG)</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500,700&display=swap" />
+
+<script>
+// ERROR HANDLER
+window.onerror = function(message, source, lineno, colno, error) {
+  console.log("Global JS Error:", message, source, lineno, colno, error);
+  alert("JS Error: " + message);
+};
+window.onunhandledrejection = function(event) {
+  console.log("Promise Error:", event.reason);
+  alert("Promise Error: " + event.reason);
+};
+</script>
+
+<!-- TFJS + USE -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/universal-sentence-encoder/dist/universal-sentence-encoder.min.js"></script>
+
+<!-- GLOBAL TFJS CHAR RNN UTIL -->
+<script src="./model_utils.js"></script>
+
+<style>
+  /* Android Theme */
+  :root { --primary:#1e88e5; --bg:#f5f5f5; --card:#fff }
+  html,body{height:100%;margin:0;font-family:Roboto,Arial,sans-serif;background:var(--bg)}
+  header{background:var(--primary);color:#fff;padding:14px;text-align:center;font-weight:500;box-shadow:0 2px 6px rgba(0,0,0,0.12)}
+  #status{padding:8px 12px;font-size:13px;color:#333;background:linear-gradient(90deg,rgba(255,255,255,0.6),transparent);}
+  #app{display:flex;flex-direction:column;height:calc(100% - 62px)}
+  #main{flex:1;display:flex;gap:16px;padding:16px;box-sizing:border-box}
+  #chatCol{flex:1;display:flex;flex-direction:column;max-width:900px;margin:auto}
+  #chat{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:12px}
+  .msg{padding:12px 16px;border-radius:12px;max-width:78%;white-space:pre-wrap;line-height:1.4}
+  .user{align-self:flex-end;background:var(--primary);color:white}
+  .bot{align-self:flex-start;background:#e3f2fd;color:#0d47a1}
+  #inputBar{display:flex;gap:8px;padding:12px;background:var(--card);box-shadow:0 -2px 8px rgba(0,0,0,0.04);align-items:center}
+  #textInput{flex:1;padding:12px;border-radius:8px;border:1px solid #ddd;font-size:16px}
+  button{background:var(--primary);color:#fff;border:none;padding:10px 14px;border-radius:8px;font-weight:500}
+  #sidebar{width:340px;display:flex;flex-direction:column;gap:12px}
+  .panel{background:var(--card);padding:12px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.04)}
+  pre.small{font-size:13px;white-space:pre-wrap}
+  footer{padding:8px;text-align:center;font-size:12px;color:#666}
+  @media (max-width:980px){#main{padding:10px}#sidebar{display:none}#chatCol{margin:0}}
+</style>
+</head>
+
+<body>
+<header>Professor Aurora — Client-side TF.js Generator (RAG)</header>
+<div id="status">Initializing models…</div>
+
+<div id="app">
+  <div id="main">
+    <div id="chatCol">
+      <div id="chat" role="log" aria-live="polite"></div>
+      <div id="inputBar" role="region" aria-label="Message composer">
+        <input id="textInput" placeholder="Ask Professor Aurora (e.g., 'Explain backpropagation')"/>
+        <button id="sendBtn">Send</button>
+        <button id="clearBtn" title="Clear chat">Clear</button>
+      </div>
+    </div>
+
+    <div id="sidebar">
+      <div class="panel">
+        <strong>Agent</strong>
+        <div id="agentBox" style="margin-top:8px"></div>
+      </div>
+
+      <div class="panel">
+        <strong>Generation</strong>
+        <div style="margin-top:8px">
+          <label>Max tokens: <input id="maxLen" type="number" value="150" style="width:80px"></label>
+        </div>
+        <div style="margin-top:8px">
+          <label>Temperature: <input id="temp" type="number" step="0.1" value="0.8" style="width:80px"></label>
+        </div>
+        <div style="margin-top:8px">
+          <label><input type="checkbox" id="useRetrieval" checked/> Use retrieval</label>
+        </div>
+        <div style="margin-top:8px">
+          <a href="training.html">Open Trainer (on-device)</a>
+        </div>
+      </div>
+
+      <div class="panel">
+        <strong>Dataset preview</strong>
+        <pre id="datasetPreview" class="small">Loading…</pre>
+      </div>
+    </div>
+  </div>
+  <footer>All inference runs locally in your browser (TF.js). No external APIs.</footer>
+</div>
+
+<!-- MAIN SCRIPT (no modules!) -->
+<script>
+let useModel=null, profile=null, chunks=[], generator=null;
+
+const defaultChunks = [
+  {id:'c1', text:'Backpropagation is the algorithm used to compute gradients in neural networks by applying the chain rule to propagate the error from the output back to earlier layers.'},
+  {id:'c2', text:'Gradient descent updates parameters by moving them in the negative direction of the gradient of the loss function.'},
+  {id:'c3', text:'A neuron computes a weighted sum of its inputs, applies an activation function, and outputs the result.'},
+  {id:'c4', text:'Overfitting happens when a model learns noise in the training data; mitigations include regularization and dropout.'},
+  {id:'c5', text:'Convolutional neural networks use convolutional layers to learn spatial hierarchies of features from images.'}
+];
+
+function appendMsg(text, who='bot'){
+  const chat=document.getElementById('chat');
+  const d=document.createElement('div');
+  d.className='msg '+(who==='user'?'user':'bot');
+  d.innerText=text;
+  chat.appendChild(d);
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function setStatus(s){ document.getElementById('status').innerText=s; }
+
+function cosine(a,b){
+  let dot=0,na=0,nb=0;
+  for(let i=0;i<a.length;i++){ dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
+  return dot/(Math.sqrt(na)*Math.sqrt(nb)+1e-8);
+}
+
+async function loadResources(){
+  setStatus('Loading Universal Sentence Encoder...');
+  useModel = await use.load();   // <--- USE NOW WORKS
+
+  setStatus('Loading agent profile...');
+  try{
+    profile = await (await fetch('online_professor_agent_profile.json')).json();
+  }catch(e){
+    profile={agent_name:'Professor Aurora', default_prompts:{welcome:'Hello!'}};
+  }
+
+  document.getElementById('agentBox').innerText = profile.description || profile.agent_name;
+
+  setStatus('Building retrieval index...');
+  await buildIndex(defaultChunks);
+
+  setStatus('Initializing generator...');
+  generator = new CharRNNGenerator();
+  await generator.buildModel();
+
+  setStatus('Ready — ' + profile.agent_name + ' is available.');
+  appendMsg(profile.default_prompts?.welcome || 'Hello!','bot');
+
+  refreshDatasetPreview();
+}
+
+async function buildIndex(sourceChunks){
+  const texts = sourceChunks.map(c=>c.text);
+  const embTensor = await useModel.embed(texts);
+  const embArr = await embTensor.array();
+  embTensor.dispose();
+  chunks = sourceChunks.map((c,i)=>({ id:c.id, text:c.text, embedding: embArr[i] }));
+  refreshDatasetPreview();
+}
+
+function refreshDatasetPreview(){
+  document.getElementById('datasetPreview').innerText =
+    chunks.map(c=>c.text.slice(0,180)).join("\n\n");
+}
+
+function retrieveRelevant(qEmb,k=3){
+  const sims = chunks.map(c=>({id:c.id,sim:cosine(qEmb,c.embedding),text:c.text}));
+  sims.sort((a,b)=>b.sim-a.sim);
+  return sims.slice(0,k);
+}
+
+async function analyzeAndGenerate(query){
+  const useRetrieval = document.getElementById('useRetrieval').checked;
+  const maxLen = Number(document.getElementById('maxLen').value) || 150;
+  const temp = Number(document.getElementById('temp').value) || 0.8;
+
+  appendMsg(query,'user');
+
+  setStatus('Computing embedding...');
+  const qEmbTensor = await useModel.embed([query]);
+  const qEmb = (await qEmbTensor.array())[0];
+  qEmbTensor.dispose();
+
+  let retrieved = [];
+  if(useRetrieval){
+    setStatus('Retrieving relevant passages...');
+    retrieved = retrieveRelevant(qEmb,3);
+  }
+
+  const context =
+    (retrieved.map(r=>'[CONTEXT] '+r.text).join('\n\n') +
+    '\n\n[QUESTION] ' + query +
+    '\n[ANSWER] ').slice(0,2000);
+
+  setStatus('Generating...');
+  const generated = await generator.generate(context, maxLen, temp);
+
+  setStatus('Ready');
+  appendMsg(generated,'bot');
+}
+
+document.getElementById('sendBtn').addEventListener('click', ()=>{
+  const t=document.getElementById('textInput');
+  const v=t.value.trim();
+  if(!v) return;
+  analyzeAndGenerate(v);
+  t.value='';
+});
+
+document.getElementById('textInput').addEventListener('keypress',(e)=>{
+  if(e.key==='Enter' && !e.shiftKey){
+    e.preventDefault();
+    document.getElementById('sendBtn').click();
+  }
+});
+
+document.getElementById('clearBtn').addEventListener('click', ()=>{
+  document.getElementById('chat').innerHTML='';
+});
+
+(async ()=>{
+  const stored = localStorage.getItem('professor_chunks_v1');
+  if(stored){
+    try{
+      const parsed = JSON.parse(stored);
+      await loadResources();
+      await buildIndex(parsed);
+    }catch(e){
+      console.warn(e);
+      await loadResources();
+    }
+  } else {
+    await loadResources();
+  }
+})();
+</script>
+
+</body>
+</html>

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Professor Aurora — Training View</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.11.0/dist/tf.min.js"></script>
+<style>
+body{font-family:Roboto,Arial,sans-serif;background:#f5f5f5;margin:0;padding:0}
+header{background:#1e88e5;color:#fff;padding:14px;text-align:center}
+main{padding:16px;display:flex;flex-direction:column;gap:12px}
+textarea{width:100%;height:160px;padding:8px;font-size:14px;border-radius:8px;border:1px solid #ddd}
+button{background:#1e88e5;color:#fff;border:none;padding:10px 14px;border-radius:8px;font-weight:500}
+#status{color:#333;font-size:13px}
+</style>
+</head>
+<body>
+<header>Professor Aurora — On-device Training</header>
+<main>
+  <label>Enter dataset chunks (JSON array of objects with "id" and "text")</label>
+  <textarea id="datasetInput">[
+  {"id":"c1","text":"Example: Backpropagation is the algorithm to compute gradients."}
+]</textarea>
+  <button id="trainBtn">Train Model</button>
+  <div id="status">Status: idle</div>
+</main>
+
+<script>
+let generator = new CharRNNGenerator();
+generator.buildModel();
+
+async function trainModel(chunks){
+  document.getElementById('status').innerText='Training...';
+  const texts = chunks.map(c=>c.text).join('\n');
+  const xs = texts.split('').map(c=>c.charCodeAt(0)/255);
+  const ys = xs.slice(1).concat([0]);
+  const xsTensor = tf.tensor(xs,[xs.length,1]);
+  const ysTensor = tf.tensor(ys,[ys.length,1]);
+  await generator.model.fit(xsTensor,ysTensor,{epochs:2,batchSize:32});
+  xsTensor.dispose();
+  ysTensor.dispose();
+  document.getElementById('status').innerText='Training complete! You can now return to chat.';
+  window.updateChunksFromTrainer(chunks);
+}
+
+document.getElementById('trainBtn').addEventListener('click',()=>{
+  try{
+    const chunks = JSON.parse(document.getElementById('datasetInput').value);
+    trainModel(chunks);
+  }catch(e){alert('Invalid JSON'); console.warn(e);}
+});
+</script>
+</body>
+</html>
