@@ -1,5 +1,8 @@
 # Professor Aurora — TF.js Offline Chatbot
 
+## Live Demo
+[Online Demo](https://curious-gaufre-a55ca6.netlify.app)
+
 ## Overview
 This project is a local, TF.js-based text generation chatbot with:
 - Offline text generation (Char-RNN)
